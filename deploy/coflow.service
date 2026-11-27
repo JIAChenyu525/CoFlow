@@ -1,0 +1,21 @@
+[Unit]
+Description=CoFlow Web (Next.js)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=coflow
+Group=coflow
+WorkingDirectory=/opt/coflow
+EnvironmentFile=/opt/coflow/.env
+Environment=NODE_ENV=production
+Environment=PORT=3000
+# 直接用 node 调 next，避免依赖 pnpm 的安装路径（不同镜像下位置不同）
+ExecStart=/usr/bin/node /opt/coflow/node_modules/next/dist/bin/next start -p 3000
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm exec prisma generate
+
+      - name: Type check
+        run: pnpm exec tsc --noEmit
+
+      - name: Lint
+        run: pnpm exec eslint src prisma
+
+      - name: Unit tests
+        run: |
+          set -e
+          for f in context-test.ts capability-test.mjs scope-test.mjs locks-test.ts \
+                   dispatch-test.ts weekly-test.ts risks-test.ts templates-test.ts; do
+            echo "--- $f"
+            if [[ "$f" == *.ts ]]; then
+              pnpm exec tsx "scripts/$f"
+            else
+              node "scripts/$f"
+            fi
+          done
+
+      - name: Build
+        run: pnpm build
+        env:
+          # 构建期不连库：所有页面都是动态渲染，这里只需要让 Prisma 读到变量
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/coflow

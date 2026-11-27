@@ -1,0 +1,128 @@
+/* =============================================================================
+   Figma 设计系统令牌（方向二：纸上实验室 Archival Lab Ledger）
+   来源：图稿导出的 index.css，去掉了重复的 tailwind 引入。
+   与旧令牌（--paper / --accent 等）并存，页面逐个迁移，旧页面不受影响。
+   ============================================================================= */
+
+:root {
+  /* 四级表面 */
+  --cf-surface-paper: #efece6;
+  --cf-surface-card: #faf8f5;
+  --cf-surface-secondary: #f3efe8;
+  --cf-surface-tertiary: #e5e0d5;
+
+  /* 四级文字 */
+  --cf-text-primary: #1c1917;
+  --cf-text-secondary: #44403c;
+  --cf-text-tertiary: #78716c;
+  --cf-text-muted: #a8a29e;
+
+  /* 两级分割线 */
+  --cf-border-strong: #c7c0b3;
+  --cf-border-strong-hover: #9c9486;
+  --cf-border-subtle: #e4dfd5;
+
+  /* 主色：深墨青 */
+  --cf-primary: #0f5257;
+  --cf-primary-deep: #09383c;
+  --cf-primary-tint: #e3f1f2;
+  --cf-primary-border: #8ac4c8;
+
+  /* 五种语义色 */
+  --cf-success: #15803d;
+  --cf-success-bg: #ecfdf3;
+  --cf-success-border: #86efac;
+
+  --cf-warning: #b45309;
+  --cf-warning-bg: #fffbeb;
+  --cf-warning-border: #fcd34d;
+
+  --cf-danger: #b91c1c;
+  --cf-danger-bg: #fef2f2;
+  --cf-danger-border: #fca5a5;
+
+  --cf-info: #0369a1;
+  --cf-info-bg: #f0f9ff;
+  --cf-info-border: #7dd3fc;
+
+  --cf-neutral: #57534e;
+  --cf-neutral-bg: #f3f1ed;
+  --cf-neutral-border: #d6d1c7;
+
+  /* 字体栈 */
+  --cf-font-sans: "MiSans", "HarmonyOS Sans SC", "Microsoft YaHei UI", "PingFang SC",
+    "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  --cf-font-serif: "Source Han Serif SC", "Noto Serif SC", "Songti SC", serif;
+  --cf-font-mono: "IBM Plex Mono", "JetBrains Mono", "Fira Code", "Cascadia Mono",
+    Consolas, monospace;
+
+  /* 7 级字号与中文行高 */
+  --cf-t1-size: 20px;
+  --cf-t1-lh: 28px;
+  --cf-t2-size: 16px;
+  --cf-t2-lh: 24px;
+  --cf-t3-size: 14px;
+  --cf-t3-lh: 22px;
+  --cf-t4-size: 13px;
+  --cf-t4-lh: 20px;
+  --cf-t5-size: 12px;
+  --cf-t5-lh: 18px;
+  --cf-t6-size: 11px;
+  --cf-t6-lh: 16px;
+  --cf-t7-size: 10px;
+  --cf-t7-lh: 14px;
+
+  /* 间距与圆角 */
+  --cf-space-unit: 4px;
+  --cf-space-1: 4px;
+  --cf-space-1-5: 6px;
+  --cf-space-2: 8px;
+  --cf-space-3: 12px;
+  --cf-space-4: 16px;
+  --cf-space-5: 20px;
+  --cf-space-6: 24px;
+
+  --cf-radius-container: 3px;
+  --cf-radius-control: 2px;
+  --cf-radius-badge: 2px;
+
+  /* 阴影 */
+  --cf-shadow-card: 2px 2px 0px 0px #d6d1c7;
+  --cf-shadow-card-hover: 3px 3px 0px 0px #bfb8aa;
+  --cf-shadow-float: 0 8px 24px -4px rgba(28, 25, 23, 0.14),
+    0 2px 6px -1px rgba(28, 25, 23, 0.08);
+}
+
+/* 新界面使用这套基础排版；旧页面尚未迁移，暂不改 body 全局 */
+.cf-scope {
+  font-family: var(--cf-font-sans);
+  font-size: var(--cf-t4-size);
+  line-height: var(--cf-t4-lh);
+  background-color: var(--cf-surface-paper);
+  color: var(--cf-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.cf-scope code,
+.cf-scope pre,
+.font-mono-tabular {
+  font-family: var(--cf-font-mono);
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+
+/* 旁路取消状态的微斜纹背景 */
+.cf-pattern-cancelled {
+  background-color: var(--cf-surface-tertiary);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 3px,
+    rgba(120, 113, 108, 0.16) 3px,
+    rgba(120, 113, 108, 0.16) 6px
+  );
+}
+
+.cf-grayscale-proof {
+  filter: grayscale(100%);
+}

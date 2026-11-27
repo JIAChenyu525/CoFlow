@@ -1,0 +1,601 @@
+// CoFlow — 阶段一：项目事实层
+// 设计依据：多 Agent 团队协同工作台设计方案 §9.1 核心实体
+// 原则：事件记录（不可变）+ 当前状态投影（可变，带版本号）
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── 枚举 ─────────────────────────
+
+enum ProjectStage {
+  DEFINE // 定义
+  BUILD // 开发
+  INTEGRATE // 联调
+  REVIEW // 验收
+  ARCHIVED // 归档
+}
+
+enum ProjectRole {
+  OWNER // 发起人：目标决策权 + 最终验收
+  LEAD // 负责人：拆解、派发、验收
+  MEMBER // 普通成员
+  REVIEWER // 专业评审
+  OBSERVER // 观察员：只读
+}
+
+enum TaskStatus {
+  CLARIFY // 待澄清
+  UNCLAIMED // 待认领
+  READY // 已就绪
+  IN_PROGRESS // 进行中
+  IN_REVIEW // 待验收
+  DONE // 已完成
+  BLOCKED // 已阻塞（旁路）
+  PAUSED // 已暂停（旁路）
+  CANCELLED // 已取消（旁路）
+}
+
+enum Priority {
+  P0
+  P1
+  P2
+  P3
+}
+
+enum MessageType {
+  TEXT
+  TASK_REF
+  DECISION_PROPOSAL
+  BLOCKER
+  ARTIFACT_SUBMIT
+  SYSTEM
+  AGENT_REPORT
+}
+
+enum DecisionStatus {
+  PROPOSED // 提案，未进入事实层
+  CONFIRMED // 已确认，进入事实层
+  SUPERSEDED // 被新决策替代
+}
+
+enum ArtifactType {
+  COMMIT
+  BUILD
+  DOC
+  DESIGN
+  IMAGE
+  DATA
+  TEST_REPORT
+  LINK
+  NOTE
+}
+
+enum ReviewVerdict {
+  PASS
+  RETURN
+  NEED_MORE
+}
+
+enum MilestoneStatus {
+  PLANNED
+  ACTIVE
+  DONE
+}
+
+enum ActorType {
+  HUMAN
+  AGENT_SESSION
+  SYSTEM
+}
+
+// ───────────────────────── 身份 ─────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  handle    String   @unique
+  email     String?  @unique
+  color     String   @default("#0F5F5C")
+  // 邮箱+密码登录用；为空表示这个账号只走验证码登录
+  passwordHash String?
+  // 用户自己选的"私人助手"端点，项目里默认按这个展示
+  preferredEndpointId String?
+  createdAt DateTime @default(now())
+
+  memberships   Membership[]
+  authored      Message[]
+  decided       Decision[]
+  submitted     Artifact[]
+  reviewed      Review[]
+  assignedTasks Task[]         @relation("TaskAssignee")
+  reviewTasks   Task[]         @relation("TaskReviewer")
+  sessions      Session[]
+  devices       Device[]
+  sentInvites     ProjectInvitation[] @relation("InvitationSender")
+  receivedInvites ProjectInvitation[] @relation("InvitationReceiver")
+  assistantMessages Message[] @relation("AssistantMessages")
+  assistantRequests AssistantRequest[]
+
+  @@map("users")
+}
+
+// 邮箱验证码：只存哈希，10 分钟过期，一次性
+model LoginCode {
+  id         String    @id @default(cuid())
+  email      String
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  @@index([email, createdAt])
+  @@map("login_codes")
+}
+
+// 登录会话：Cookie 里只放原始 token，库里存 sha256
+model Session {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  userAgent  String?
+  ip         String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+// 设备：Connector 的身份，与模型密钥无关
+model Device {
+  id        String    @id @default(cuid())
+  userId    String
+  name      String
+  os        String
+  tokenHash String    @unique
+  createdAt DateTime  @default(now())
+  lastSeenAt DateTime?
+  revokedAt DateTime?
+
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoints AgentEndpoint[]
+
+  @@index([userId])
+  @@map("devices")
+}
+
+// 设备配对（OAuth device grant 风格）：连接器拿 device_code 轮询，人拿 user_code 在网页确认
+model DevicePairing {
+  id         String    @id @default(cuid())
+  deviceCode String    @unique // 高熵密钥，只给连接器
+  userCode   String    @unique // 人可读，形如 ABCD-2345
+  name       String
+  os         String
+  status     String    @default("PENDING") // PENDING / APPROVED / CONSUMED / EXPIRED
+  userId     String?
+  interval   Int       @default(3)
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  approvedAt DateTime?
+  consumedAt DateTime?
+
+  @@index([status, expiresAt])
+  @@map("device_pairings")
+}
+
+enum Capability {
+  AUTO // 可无头调用
+  SEMI // 已安装但调用不稳定
+  MANUAL // 封闭，只能人工回传
+}
+
+// 一个成员电脑上的一个工具实例
+model AgentEndpoint {
+  id           String     @id @default(cuid())
+  deviceId     String
+  projectId    String?
+  toolType     String
+  toolVersion  String     @default("unknown")
+  capability   Capability @default(MANUAL)
+  status       String     @default("ONLINE") // ONLINE / BUSY / OFFLINE / REVOKED
+  allowedPaths Json       @default("[]")
+  headlessOk   Boolean    @default(false)
+  capabilityNote String? // 降级原因：缺少什么能力，给用户看
+  lastSeenAt   DateTime?
+  createdAt    DateTime   @default(now())
+
+  device   Device         @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  project  Project?       @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  leases   TaskLease[]
+  sessions AgentSession[]
+
+  @@index([deviceId])
+  @@index([projectId])
+  @@map("agent_endpoints")
+}
+
+model Project {
+  id        String       @id @default(cuid())
+  name      String
+  key       String       @unique // 人类可读短号，如 ZX
+  summary   String
+  stage     ProjectStage @default(DEFINE)
+  // 邀请码：负责人开启后，别人凭码加入。为空表示关闭加入
+  inviteCode String?     @unique
+  createdAt DateTime     @default(now())
+  archivedAt DateTime?
+
+  members    Membership[]
+  charters   Charter[]
+  milestones Milestone[]
+  tasks      Task[]
+  messages   Message[]
+  decisions  Decision[]
+  artifacts  Artifact[]
+  events     ProjectEvent[]
+  endpoints  AgentEndpoint[]
+  invitations ProjectInvitation[]
+  assistantRequests AssistantRequest[]
+
+  @@map("projects")
+}
+
+model Membership {
+  id        String      @id @default(cuid())
+  projectId String
+  userId    String
+  role      ProjectRole
+  joinedAt  DateTime    @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@map("memberships")
+}
+
+// 项目章程：目标变更必须生成新版本，旧版本不可静默覆盖（§6.1）
+model Charter {
+  id              String   @id @default(cuid())
+  projectId       String
+  version         Int
+  goal            String // 项目目标
+  targetUsers     String // 目标用户
+  scope           String // 交付范围
+  nonGoals        String // 非目标
+  constraints     String // 约束条件
+  acceptance      String // 验收标准
+  decisionMakerId String? // 目标决策人
+  note            String? // 版本变更说明
+  createdById     String
+  createdAt       DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, version])
+  @@map("charters")
+}
+
+model Milestone {
+  id        String          @id @default(cuid())
+  projectId String
+  title     String
+  dueDate   DateTime?
+  status    MilestoneStatus @default(PLANNED)
+  sort      Int             @default(0)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks   Task[]
+
+  @@map("milestones")
+}
+
+// ───────────────────────── 协作核心单元 ─────────────────────────
+
+model Task {
+  id          String     @id @default(cuid())
+  projectId   String
+  milestoneId String?
+  title       String
+  description String     @default("") // 说明
+  inputs      String     @default("") // 输入材料
+  scope       String     @default("") // 工作范围
+  nonScope    String     @default("") // 非工作范围
+  acceptance  String     @default("") // 验收标准（逐条）
+  priority    Priority   @default(P2)
+  status      TaskStatus @default(CLARIFY)
+
+  assigneeId String?
+  reviewerId String?
+  dueDate    DateTime?
+  weight     Int       @default(1) // 进度权重
+
+  blockedReason String? // 阻塞原因
+  blockedNeeds  String? // 所需支持
+  version       Int     @default(1) // 乐观锁版本号
+  revision      Int     @default(1) // 返工轮次
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  milestone   Milestone?       @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  assignee    User?            @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  reviewer    User?            @relation("TaskReviewer", fields: [reviewerId], references: [id])
+  messages    Message[]
+  decisions   Decision[]
+  artifacts   Artifact[]
+  reviews     Review[]
+  dependencies TaskDependency[] @relation("TaskDependsOn")
+  dependents   TaskDependency[] @relation("TaskDependencyOf")
+  contextSnapshots ContextSnapshot[]
+  leases     TaskLease[]
+  sessions   AgentSession[]
+
+  @@index([projectId, status])
+  @@map("tasks")
+}
+
+model TaskDependency {
+  id             String @id @default(cuid())
+  taskId         String
+  dependsOnTaskId String
+
+  task        Task @relation("TaskDependsOn", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOn   Task @relation("TaskDependencyOf", fields: [dependsOnTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnTaskId])
+  @@map("task_dependencies")
+}
+
+model Message {
+  id        String      @id @default(cuid())
+  projectId String
+  taskId    String?
+  channel   String      @default("general")
+  type      MessageType @default(TEXT)
+  body      String
+  authorId  String
+  // HUMAN：成员本人；AGENT：这个成员自己的 AI 助手
+  authorType String @default("HUMAN")
+  agentOwnerId String?
+  refType   String? // GOAL / TASK / DECISION / ARTIFACT
+  refId     String?
+  createdAt DateTime    @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task    Task?   @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  author  User    @relation(fields: [authorId], references: [id])
+  agentOwner User? @relation("AssistantMessages", fields: [agentOwnerId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, channel, createdAt])
+  @@map("messages")
+}
+
+model Decision {
+  id           String         @id @default(cuid())
+  projectId    String
+  taskId       String?
+  title        String
+  conclusion   String
+  rationale    String
+  alternatives String         @default("")
+  impact       String         @default("")
+  status       DecisionStatus @default(PROPOSED)
+  version      Int            @default(1)
+  decidedById  String?
+  supersedesId String?
+  createdAt    DateTime       @default(now())
+  confirmedAt  DateTime?
+
+  project    Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task       Task?      @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  decidedBy  User?      @relation(fields: [decidedById], references: [id])
+  supersedes Decision?  @relation("DecisionSupersede", fields: [supersedesId], references: [id])
+  supersededBy Decision[] @relation("DecisionSupersede")
+
+  @@index([projectId, status])
+  @@map("decisions")
+}
+
+model Artifact {
+  id          String       @id @default(cuid())
+  projectId   String
+  taskId      String?
+  type        ArtifactType
+  title       String
+  location    String // 提交号 / 文件路径 / 链接
+  version     String       @default("v1")
+  hash        String?
+  note        String       @default("")
+  submittedById String
+  createdAt   DateTime     @default(now())
+
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task        Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  submittedBy User     @relation(fields: [submittedById], references: [id])
+  reviews     Review[]
+
+  @@index([projectId])
+  @@map("artifacts")
+}
+
+model Review {
+  id           String        @id @default(cuid())
+  taskId       String
+  artifactId   String?
+  verdict      ReviewVerdict
+  criteriaNotes String       @default("") // 标准—证据逐条结论
+  comment      String        @default("")
+  reviewerId   String
+  createdAt    DateTime      @default(now())
+
+  task     Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  artifact Artifact? @relation(fields: [artifactId], references: [id], onDelete: SetNull)
+  reviewer User      @relation(fields: [reviewerId], references: [id])
+
+  @@index([taskId])
+  @@map("reviews")
+}
+
+// 上下文快照：回答「某个 Agent 某次工作时看到了什么」（§5.2）
+model ContextSnapshot {
+  id           String   @id @default(cuid())
+  taskId       String
+  endpointId   String?
+  hash         String
+  version      Int      @default(1)
+  packageJson  Json
+  tokens       Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, createdAt])
+  @@map("context_snapshots")
+}
+
+// ───────────────────────── Agent 执行 ─────────────────────────
+
+enum LeaseStatus {
+  OFFERED // 已下发给端点，等人/连接器接受
+  ACCEPTED // 已接受，尚未开工
+  ACTIVE // 执行中，靠心跳续期
+  SUBMITTED // 结果已回传，等人工验收
+  EXPIRED // 过期未接受
+  REVOKED // 被撤销
+}
+
+// 租约：有时效、可撤销、绑定上下文版本。任务不会因为「派发了」就变进行中。
+model TaskLease {
+  id                String      @id @default(cuid())
+  taskId            String
+  endpointId        String
+  contextSnapshotId String
+  status            LeaseStatus @default(OFFERED)
+  declaredPaths     Json        @default("[]")
+  expiresAt         DateTime
+  createdAt         DateTime    @default(now())
+  acceptedAt        DateTime?
+  submittedAt       DateTime?
+
+  task     Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  endpoint AgentEndpoint    @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  session  AgentSession?
+
+  @@index([endpointId, status])
+  @@index([taskId])
+  @@map("task_leases")
+}
+
+model AgentSession {
+  id                String    @id @default(cuid())
+  leaseId           String    @unique
+  endpointId        String
+  taskId            String
+  contextSnapshotId String
+  contextHash       String
+  status            String    @default("ACTIVE") // ACTIVE / SUBMITTED / FAILED / STALE
+  startedAt         DateTime  @default(now())
+  lastHeartbeatAt   DateTime  @default(now())
+  endedAt           DateTime?
+
+  lease    TaskLease     @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  endpoint AgentEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  task     Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([endpointId, status])
+  @@map("agent_sessions")
+}
+
+// ───────────────────────── 事实记录 ─────────────────────────
+
+// 不可变事件流。所有状态变化先写事件，再改投影。
+model ProjectEvent {
+  id            String    @id @default(cuid())
+  projectId     String
+  clientEventId String?   @unique // Connector 生成的幂等键
+  sessionId     String? // 关联 AgentSession
+  type          String // task.status_changed / decision.confirmed / artifact.submitted ...
+  actorType     ActorType
+  actorId       String
+  subjectType   String
+  subjectId     String
+  payload       Json
+  source        String    @default("web")
+  correlationId String?
+  visibility    String    @default("project")
+  schemaVersion String    @default("1.0")
+  occurredAt    DateTime  @default(now())
+  receivedAt    DateTime  @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, occurredAt])
+  @@index([projectId, type])
+  @@map("project_events")
+}
+
+
+// 加入邀请：负责人发起，必须由被邀请人接受后才成为成员。
+// 直接把人塞进项目是不礼貌的，也容易被恶意拉人。
+model ProjectInvitation {
+  id          String            @id @default(cuid())
+  projectId   String
+  inviterId   String
+  inviteeId   String
+  role        ProjectRole       @default(MEMBER)
+  status      InvitationStatus  @default(PENDING)
+  message     String?
+  createdAt   DateTime          @default(now())
+  respondedAt DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  inviter User    @relation("InvitationSender", fields: [inviterId], references: [id], onDelete: Cascade)
+  invitee User    @relation("InvitationReceiver", fields: [inviteeId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, inviteeId])
+  @@index([inviteeId, status])
+  @@map("project_invitations")
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  REVOKED
+}
+
+
+// 频道里向「我自己的助手」提问：请求绑定到具体成员，
+// 只有绑定本人的连接器能领走并用他自己的工具回答。
+model AssistantRequest {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String
+  channel   String   @default("general")
+  prompt    String
+  status    String   @default("PENDING") // PENDING / RUNNING / DONE / FAILED
+  reply     String?
+  error     String?
+  createdAt DateTime @default(now())
+  claimedAt DateTime?
+  finishedAt DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@map("assistant_requests")
+}

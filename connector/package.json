@@ -1,0 +1,28 @@
+{
+  "name": "coflow-connector",
+  "version": "0.1.0",
+  "description": "CoFlow 本地连接器：配对设备、领取任务、落盘上下文包、采集证据并回传结果",
+  "type": "module",
+  "bin": {
+    "coflow": "bin/coflow.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "tools/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "coflow",
+    "agent",
+    "connector",
+    "cli",
+    "project-collaboration"
+  ],
+  "license": "MIT",
+  "author": "贾晨宇"
+}
