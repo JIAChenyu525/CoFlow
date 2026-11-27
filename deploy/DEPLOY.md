@@ -1,6 +1,6 @@
 # 部署到阿里云 Ubuntu 22.04
 
-服务器：47.98.117.68，2 核 2G，Ubuntu 22.04。
+服务器：一台 2 核 2G 的 Ubuntu 22.04 云主机（把下面命令里的 `<服务器IP>` 换成你的公网 IP）。
 
 整条链路大约 15 分钟，其中构建占大半。全程只需要在服务器上执行 `deploy/setup.sh`。
 
@@ -24,7 +24,7 @@
 在**你自己的 Windows** 上打开 PowerShell，执行：
 
 ```powershell
-scp D:\CoFlow-deploy.tar.gz root@47.98.117.68:/opt/
+scp D:\CoFlow-deploy.tar.gz root@<服务器IP>:/opt/
 ```
 
 首次连接会问是否信任主机，输入 `yes`，然后输入服务器 root 密码（在阿里云控制台「重置密码」里设置）。
@@ -32,7 +32,7 @@ scp D:\CoFlow-deploy.tar.gz root@47.98.117.68:/opt/
 传完后 SSH 登录：
 
 ```powershell
-ssh root@47.98.117.68
+ssh root@<服务器IP>
 ```
 
 解压：
@@ -60,7 +60,7 @@ bash deploy/setup.sh
 结束时如果打印「部署完成」，浏览器打开：
 
 ```
-http://47.98.117.68:3000
+http://<服务器IP>:3000
 ```
 
 ---
